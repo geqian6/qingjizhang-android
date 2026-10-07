@@ -3,7 +3,7 @@ name: 编译 APK
 on:
   push:
     branches: [ main, master ]
-    # 报错文件回写仓库时不再触发新一轮编译，避免死循环
+    # 日志回写仓库时不再触发新一轮编译，避免死循环
     paths-ignore:
       - 'build-error.log'
   workflow_dispatch:
@@ -35,30 +35,45 @@ jobs:
         with:
           gradle-version: '8.7'
 
-      # 之所以把输出同时写进 build.log：
-      # 编译失败时下一步会把它整理成 build-error.log 提交回仓库，
-      # 这样不用登录 GitHub 也能从仓库里读到完整报错。
+      # set -o pipefail 是必须的：
+      # 没有它，`gradle ... | tee build.log` 的退出码取自 tee（永远是 0），
+      # gradle 明明挂了这一步也会被判成「成功」，后面的失败判断全部失效。
       - name: 编译 Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build.log
-
-      - name: 失败时把报错写回仓库
-        if: failure()
         run: |
-          if [ -f build.log ]; then
-            {
-              echo "### 报错相关行（含上下文）"
-              grep -nE -B 2 -A 8 'e: file|error:|FAILURE:|What went wrong|> Task .* FAILED|Could not (resolve|find|determine)|Unresolved reference|Caused by:|Execution failed|BUILD FAILED' build.log | head -n 500 || true
-              echo ""
-              echo "### 日志尾部 200 行"
-              tail -n 200 build.log
-            } > build-error.log
-          else
-            echo "编译还没开始，更早的步骤就失败了" > build-error.log
-          fi
+          set -o pipefail
+          gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build.log
+
+      # 无论成功失败都把日志整理一份提交回仓库。
+      # 原因：GitHub 的 Actions 日志接口要求登录，外部读不到；
+      # 写进仓库后，这个公开仓库的日志谁都能读到，不用再靠截图。
+      - name: 把编译日志写回仓库
+        if: always()
+        run: |
+          touch build.log
+          {
+            echo "===== 运行信息 ====="
+            echo "run_number : ${GITHUB_RUN_NUMBER}"
+            echo "commit     : ${GITHUB_SHA}"
+            echo "时间(UTC)  : $(date -u)"
+            echo
+            echo "===== Gradle / Java 版本 ====="
+            gradle --version 2>&1 || true
+            java -version 2>&1 || true
+            echo
+            echo "===== APK 产物目录 ====="
+            ls -la app/build/outputs/apk/debug/ 2>&1 || echo "（没有产物目录）"
+            echo
+            echo "===== 报错相关行（含上下文） ====="
+            grep -nE -B 3 -A 12 'e: file|e: |error:|FAILURE:|What went wrong|FAILED|Could not resolve|Could not find|Unresolved reference|Caused by:|Execution failed|BUILD FAILED|AAPT|requires|Duplicate class' build.log 2>&1 | head -n 400 || true
+            echo
+            echo "===== 日志尾部 300 行 ====="
+            tail -n 300 build.log 2>&1 || true
+          } > build-error.log
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -f build-error.log
-          git commit -m "记录编译错误 [skip ci]" || true
+          git commit -m "记录编译日志 [skip ci]" || true
           git push || true
 
       - name: 上传 APK（构建产物，备用）
@@ -76,6 +91,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          ls -la app/build/outputs/apk/debug/
           TAG="build-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" app/build/outputs/apk/debug/app-debug.apk \
             --title "轻记账 v0.1.0 · 构建 ${GITHUB_RUN_NUMBER}" \
