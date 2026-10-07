@@ -1,5 +1,7 @@
 package com.geqian6.qingjizhang.ui
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -38,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import com.geqian6.qingjizhang.ui.theme.AppColor
 import com.geqian6.qingjizhang.util.AutoRecord
 import com.geqian6.qingjizhang.util.BudgetStore
+import com.geqian6.qingjizhang.util.Diagnostics
 import com.geqian6.qingjizhang.util.Source
 import kotlinx.coroutines.delay
 
@@ -54,6 +57,7 @@ fun MineScreen(
     var a11yEnabled by remember { mutableStateOf(AutoRecord.isAccessibilityServiceEnabled(context)) }
     var notifEnabled by remember { mutableStateOf(AutoRecord.isNotificationAccessGranted(context)) }
     var showBankDialog by remember { mutableStateOf(false) }
+    var diagLines by remember { mutableStateOf(Diagnostics.snapshot(context)) }
 
     // 用户去系统设置里授权完要跳回来。这里没有可靠的生命周期回调能抓到那一刻，
     // 而这个页面只在「我的」Tab 显示期间存在，所以就轮询一下 —— 代价可以忽略。
@@ -61,6 +65,7 @@ fun MineScreen(
         while (true) {
             a11yEnabled = AutoRecord.isAccessibilityServiceEnabled(context)
             notifEnabled = AutoRecord.isNotificationAccessGranted(context)
+            diagLines = Diagnostics.snapshot(context)
             delay(1200L)
         }
     }
@@ -142,6 +147,91 @@ fun MineScreen(
                     fontSize = 11.sp,
                     color = AppColor.textTertiary,
                 )
+            }
+        }
+
+        // 自动记账诊断：把每次扫描看到了什么摊开写在这里。
+        // 自动记账「没反应」有三种完全不同的病因（服务没连上 / 读不到窗口 / 解析没认出金额），
+        // 外表都是一样的，只能靠这块记录区分。
+        item {
+            AppCard(padding = 18.dp) {
+                Text(
+                    text = "自动记账诊断",
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColor.textPrimary,
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = "下面记的是最近扫到的内容。没记上账时，点「复制全部」发给我就能定位卡在哪。",
+                    fontSize = 12.sp,
+                    color = AppColor.textSecondary,
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                if (diagLines.isEmpty()) {
+                    Text(
+                        text = "还没有任何记录 —— 说明扫描没跑起来。\n先把无障碍开关关掉再打开一次，然后去付一笔小额试试。",
+                        fontSize = 12.sp,
+                        color = AppColor.textTertiary,
+                    )
+                } else {
+                    diagLines.reversed().take(12).forEach { line ->
+                        Text(
+                            text = line,
+                            fontSize = 10.sp,
+                            color = AppColor.textSecondary,
+                            modifier = Modifier.padding(vertical = 2.dp),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(AppColor.primarySoft)
+                            .clickable {
+                                runCatching {
+                                    val cm = context.getSystemService(Context.CLIPBOARD_SERVICE)
+                                        as ClipboardManager
+                                    cm.setPrimaryClip(
+                                        ClipData.newPlainText(
+                                            "轻记账诊断",
+                                            diagLines.joinToString("\n")
+                                        )
+                                    )
+                                }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            text = "复制全部",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AppColor.primary,
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .background(AppColor.bg)
+                            .clickable {
+                                Diagnostics.clear(context)
+                                diagLines = emptyList()
+                            }
+                            .padding(horizontal = 14.dp, vertical = 8.dp),
+                    ) {
+                        Text(
+                            text = "清空",
+                            fontSize = 12.sp,
+                            color = AppColor.textSecondary,
+                        )
+                    }
+                }
             }
         }
 
