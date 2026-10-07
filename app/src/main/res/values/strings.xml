@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">轻记账</string>
+
+    <!-- 无障碍服务在系统设置里显示的说明。写清楚「读什么、不读什么」，用户才敢开。 -->
+    <string name="accessibility_service_summary">读取微信、支付宝的支付结果页，自动记一笔账</string>
+    <string name="accessibility_service_description">用于自动记账：当微信或支付宝的支付结果显示在屏幕上时，读取该页面上的金额、商户名和收支方向，自动生成一条流水。\n\n只读取微信（com.tencent.mm）和支付宝两个应用，其他应用一律不读；不读取任何密码、聊天内容或输入框内容；记录只保存在本机数据库，本应用没有网络权限，无法上传。</string>
+</resources>

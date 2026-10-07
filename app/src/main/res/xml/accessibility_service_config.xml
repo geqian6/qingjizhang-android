@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  轻记账 · 无障碍服务声明（自动记账的主力通道）
+
+  这份配置是整个自动记账能不能跑起来的关键，三个地方一个都不能少：
+  1. accessibilityEventTypes：必须同时声明「窗口状态变化 + 窗口内容变化 + 窗口整体变化」。
+     只声明其中一个，付款成功那种「同页换内容」的场景就收不到事件——这是最常见的失败原因。
+  2. accessibilityFlags 里的 flagRetrieveInteractiveWindows：不打开，getWindows() 返回空列表。
+     flagIncludeNotImportantViews：不打开，很多动态渲染出来的文本节点读不到。
+  3. packageNames：只收微信和支付宝的事件。既省电，也是隐私边界——别的 App 一律不读。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeWindowsChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagIncludeNotImportantViews|flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="150"
+    android:packageNames="com.tencent.mm,com.eg.android.AlipayGphone,com.eg.android.AlipayGphone.samsung"
+    android:summary="@string/accessibility_service_summary" />

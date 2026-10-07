@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 只在「自动记了一笔」时弹通知用。Android 13+ 需要用户授权，没授权也不影响记账。 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!--
+      刻意不申请的权限，都是有意的：
+      · INTERNET —— 不申请，物理上无法联网，数据只能留在本机
+      · READ_SMS —— 不申请，不碰短信
+      · SYSTEM_ALERT_WINDOW —— 不申请，所以不会像别的记账 App 那样在支付时弹悬浮窗
+    -->
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.QingJiZhang">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:theme="@style/Theme.QingJiZhang">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          自动记账 · 主力通道：无障碍读屏。
+          用户在「设置 → 无障碍 → 已安装的服务」里手动开启，随时可关。
+        -->
+        <service
+            android:name=".service.PaymentAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!--
+          自动记账 · 辅助通道：通知监听。
+          需要用户在「设置 → 通知使用权」里手动授予。
+          两条通道共用 RecordSink 入库，同一笔不会被记两次。
+        -->
+        <service
+            android:name=".service.PaymentNotificationListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+    </application>
+
+</manifest>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标：必须是纯白单色形状，系统会自动着色 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="2.2"
+        android:strokeLineCap="round"
+        android:pathData="M8,7.5 L12,13 M16,7.5 L12,13 M12,13 L12,18.5 M9.2,14.2 L14.8,14.2 M9.2,16.8 L14.8,16.8" />
+</vector>

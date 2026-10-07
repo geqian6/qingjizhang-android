@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 轻记账 App 图标 · 自适应图标前景层
+     108x108 dp 视口；图形收在中央 66dp 安全区内（外径 61.6dp），
+     启动器裁成圆形 / 方形 / 水滴形都不会伤到主体。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 环形预算：270° 开口环，中心线半径 27dp，笔画 7.594dp -->
+    <path
+        android:fillColor="#0066CC"
+        android:pathData="M54,23.203 A30.797,30.797 0 1 1 23.203,54 L30.797,54 A23.203,23.203 0 1 0 54,30.797 Z" />
+    <path
+        android:fillColor="#0066CC"
+        android:pathData="M54,27 m-3.79688,0 a3.79688,3.79688 0 1 0 7.59375,0 a3.79688,3.79688 0 1 0 -7.59375,0 M27,54 m-3.79688,0 a3.79688,3.79688 0 1 0 7.59375,0 a3.79688,3.79688 0 1 0 -7.59375,0" />
+
+    <!-- ¥：五笔，圆头，笔画 5.062dp -->
+    <path
+        android:strokeColor="#1D1D1F"
+        android:strokeWidth="5.062"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M45.5625,42.1875 L54,53.1562 M62.4375,42.1875 L54,53.1562 M54,53.1562 L54,70.0312 M44.7188,56.5312 L63.2812,56.5312 M44.7188,66.6562 L63.2812,66.6562" />
+</vector>
