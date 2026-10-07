@@ -21,8 +21,10 @@ object Diagnostics {
     private const val PREFS_NAME = "qjz_diagnostics"
     private const val KEY_LINES = "lines"
 
-    /** 最多留这么多条，超了丢最老的 */
-    private const val MAX_LINES = 60
+    /** 最多留这么多条，超了丢最老的。
+     *  40 条太少：微信付款页是固定页面，一次调试就能刷掉十几条，回头再看已经翻走了。
+     *  120 条 × 每条最长 1200 字，最坏情况约 140KB，落在 SharedPreferences 里完全无所谓。 */
+    private const val MAX_LINES = 120
 
     private val lock = Any()
     private val lines = ArrayDeque<String>()
@@ -32,7 +34,7 @@ object Diagnostics {
     fun record(context: Context, tag: String, detail: String) {
         val app = context.applicationContext
         val one = DateFormat.format("MM-dd HH:mm:ss", System.currentTimeMillis()).toString() +
-            "｜" + tag + "｜" + detail.replace('\n', ' ').take(300)
+            "｜" + tag + "｜" + detail.replace('\n', ' ').take(1200)
         synchronized(lock) {
             ensureLoaded(app)
             lines.addLast(one)

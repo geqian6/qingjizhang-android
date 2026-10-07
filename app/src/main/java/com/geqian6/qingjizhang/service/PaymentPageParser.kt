@@ -25,17 +25,37 @@ import com.geqian6.qingjizhang.util.Source
  */
 object PaymentPageParser {
 
+    /**
+     * 无障碍层给 contentDescription 加的前缀（见 PaymentAccessibilityService.walk）。
+     * 进解析前必须剥掉 —— 否则头像图的无障碍说明「苏格拉没有底头像」会带着前缀被当成商户名。
+     * 实测踩过：账单里出现了商户名「苏格拉没有底头像」。
+     */
+    private const val DESC_PREFIX = "〔描述〕"
+
     private val successKeywords = listOf(
         "支付成功", "付款成功", "已支付", "交易成功", "转账成功",
+        "已转账", "已转出", "已转入",
         "收款成功", "已收款", "退款成功", "已退款", "已存入", "已收钱"
     )
 
+    /**
+     * **支出**信号。判方向时**先查这张表**。
+     * ⚠️ 微信转账给好友的完成页写的是「已转账」而不是「支付成功」，
+     * 而这类页面往往同时出现「到账」字样 —— 不在这里抢先判成支出，就会被误判成收入（实测踩过）。
+     */
     private val expenseKeywords = listOf(
-        "支付成功", "付款成功", "已支付", "交易成功", "扣款", "消费", "转出"
+        "支付成功", "付款成功", "已支付", "交易成功", "扣款", "消费",
+        "转出", "已转账", "已转出", "转账给"
     )
 
+    /**
+     * **收入**信号。⚠️ 每一条都必须是「明确表示钱进来了」的写法。
+     * 千万别写裸的「到账」：提现页的「2小时内到账」、转账页的「实时到账」都会命中，
+     * 结果支出被记成收入 —— 实测踩过这个坑，所以只留「已到账」「到账成功」。
+     */
     private val incomeKeywords = listOf(
-        "已收款", "收款成功", "到账", "退款成功", "已退款", "已存入", "已收钱", "转入"
+        "已收款", "收款成功", "已收钱", "已存入",
+        "退款成功", "已退款", "已转入", "已到账", "到账成功"
     )
 
     /** 出现这些词说明这笔没成，直接放弃 */
@@ -71,7 +91,10 @@ object PaymentPageParser {
      * @return 解析成功返回一条流水；只要有一处拿不准就返回 null
      */
     fun parse(texts: List<String>, source: String, now: Long): TransactionRecord? {
-        val items = texts.map { it.trim().replace('\u00A0', ' ') }.filter { it.isNotEmpty() }
+        // 剥掉无障碍层加的描述前缀再进规则 —— 前缀是给诊断看的，不该污染商户名
+        val items = texts.map {
+            it.trim().replace('\u00A0', ' ').removePrefix(DESC_PREFIX)
+        }.filter { it.isNotEmpty() }
         if (items.isEmpty()) return null
 
         val joined = items.joinToString(" ")
@@ -85,6 +108,7 @@ object PaymentPageParser {
             ?: return null
         if (amountCents <= 0L) return null
 
+        // 先查支出信号：绝大多数付款场景都是花钱，收入必须"明确"才算
         val isExpense = when {
             expenseKeywords.any { joined.contains(it) } -> true
             incomeKeywords.any { joined.contains(it) } -> false
@@ -140,10 +164,15 @@ object PaymentPageParser {
      * allowDigit=true 只给带标签的候选（"7-11便利店" 这种才留得下）。
      */
     private fun tidy(raw: String, allowDigit: Boolean): String? {
-        val s = raw.replace('\n', ' ')
+        var s = raw.removePrefix(DESC_PREFIX)
+            .replace('\n', ' ')
             .trim()
             .trimStart('·', '-', '—', ':', '：')
             .trim()
+        // 头像图的无障碍说明长这样：「苏格拉没有底头像」。
+        // 昵称本身是对的，尾巴这两个字纯粹是图片语义 —— 砍掉它，只留昵称。
+        if (s.length > 2 && s.endsWith("头像")) s = s.dropLast(2).trim()
+
         if (s.length !in 2..24) return null
         if (strictAmount.containsMatchIn(s)) return null
         if (s.any { it.isDigit() } && (!allowDigit || Regex("[0-9]{2,}").containsMatchIn(s))) return null
