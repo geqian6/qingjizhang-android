@@ -40,7 +40,8 @@ class PaymentNotificationListener : NotificationListenerService() {
             .joinToString(" ")
 
         val record = PaymentParser.parse(combined, source, System.currentTimeMillis()) ?: return
-        RecordSink.submit(applicationContext, record)
+        // 通道名传进去：判重靠它区分「两条通道看到同一笔」和「用户真的付了第二笔」
+        RecordSink.submit(applicationContext, record, RecordSink.CHANNEL_NOTIFY)
     }
 
     private fun sourceOf(packageName: String?): String? = when (packageName) {

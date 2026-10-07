@@ -37,7 +37,10 @@ import com.geqian6.qingjizhang.util.Source
  * 签名永远不变 —— 一旦按签名去重，第二次之后微信的一切就再也不记录了，
  * 用户看到的现象是「明明付款了，诊断里什么也没有」。
  * 所以这里改成：**内容变了立刻记；内容没变也按时间兜底记一条**。
- * 真正防重复入库交给 RecordSink（同来源 + 同金额 90 秒去重）和下面的 changed 判断。
+ * 真正防重复入库交给 RecordSink（同来源 + 同金额去重）和下面的 changed 判断。
+ * ⚠️ 聊天页要去重得更狠：微信的转账气泡会一直挂在聊天记录里，
+ *    用默认窗口的话，别人每发一条新消息就会把同一笔转账重记一次 ——
+ *    所以按「一屏里有几个『XX头像』节点」判断是不是聊天页，是就拉长窗口。
  *
  * 隐私：读取范围被 XML 限定在微信 / 支付宝两个包内，别的 App 一律不读；
  * 文本只在内存里过一遍解析，不入库、不上传（本 App 没有网络权限）。
@@ -215,17 +218,40 @@ class PaymentAccessibilityService : AccessibilityService() {
                 continue
             }
 
+            // 聊天页识别：微信的头像图在无障碍树里是一条「XX头像」文本，
+            // 聊天记录里一抓一大把。这类页面上的转账气泡**不会消失** ——
+            // 只要窗口太短，别人每发一条新消息就会把同一笔转账重记一次。
+            val chatPage = s.texts.count { it.endsWith(AVATAR_SUFFIX) } >= CHAT_AVATAR_THRESHOLD
+
+            // 只有内容变化时才提交入库：同一屏反复扫不该反复写。
+            // 判重规则（两条通道互相重复 / 同一笔的连续页面 / 聊天页气泡）统一交给 RecordSink，
+            // 这里只负责把「这一屏是不是聊天页」告诉它 —— 聊天页要用超长窗口。
+            val stored = if (changed) {
+                RecordSink.submit(
+                    context = applicationContext,
+                    record = record,
+                    channel = RecordSink.CHANNEL_A11Y,
+                    chatPage = chatPage,
+                )
+            } else {
+                false
+            }
+
             Diagnostics.record(
                 this,
                 label,
                 "认出 ¥" + Money.format(record.amountCents) + " · " + record.merchant +
                     (if (record.isExpense) " · 支出" else " · 收入") +
-                    (if (changed) "" else " · 内容未变（跳过入库）")
+                    (if (record.note.isBlank()) "" else " · 备注=" + record.note) +
+                    "｜" + PaymentPageParser.matchedSignal(s.texts) +
+                    "｜" + when {
+                        !changed -> "内容未变（不入库）"
+                        stored -> "已入库"
+                        else -> "去重跳过" +
+                            (if (chatPage) "（聊天页 30 分钟窗口）" else "（10 秒内有同金额）")
+                    } +
+                    "｜原文 → " + s.texts.take(16).joinToString(" ／ ") { it.take(18) }
             )
-
-            // 只有内容变化时才提交入库：同一屏反复扫不该反复写。
-            // RecordSink 里还有「同来源 + 同金额 90 秒」的第二道闸。
-            if (changed) RecordSink.submit(applicationContext, record)
         }
     }
 
@@ -361,6 +387,12 @@ class PaymentAccessibilityService : AccessibilityService() {
 
         /** 窗口概览最短记录间隔（在微信/支付宝里才记） */
         const val WINDOW_BRIEF_INTERVAL_MS = 15_000L
+
+        /** 微信头像节点的后缀 —— 用来判断"这屏是聊天页还是支付页" */
+        const val AVATAR_SUFFIX = "头像"
+
+        /** 一屏里出现这么多个「XX头像」，就当成聊天页处理 */
+        const val CHAT_AVATAR_THRESHOLD = 2
     }
 }
 
