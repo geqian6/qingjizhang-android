@@ -140,13 +140,13 @@ fun StatsScreen(
             val more = (curExpense - prevExpense).coerceAtLeast(0L)
             val text = when {
                 expenseChange == null ->
-                    "${periodName}支出 ¥${Money.format(curExpense)}，$prevName无记录，暂无法对比"
+                    "${periodName}支出 ¥${Money.format(curExpense)}，${prevName}无记录，暂无法对比"
                 expenseChange <= 0f ->
-                    "${periodName}支出比$prevName少 ¥${Money.format(less)}，下降 ${
+                    "${periodName}支出比${prevName}少 ¥${Money.format(less)}，下降 ${
                         String.format("%.1f", -expenseChange * 100)
                     }%"
                 else ->
-                    "${periodName}支出比$prevName多 ¥${Money.format(more)}，上升 ${
+                    "${periodName}支出比${prevName}多 ¥${Money.format(more)}，上升 ${
                         String.format("%.1f", expenseChange * 100)
                     }%"
             }
