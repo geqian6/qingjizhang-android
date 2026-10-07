@@ -3,6 +3,9 @@ name: 编译 APK
 on:
   push:
     branches: [ main, master ]
+    # 报错文件回写仓库时不再触发新一轮编译，避免死循环
+    paths-ignore:
+      - 'build-error.log'
   workflow_dispatch:
 
 permissions:
@@ -31,10 +34,32 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.7'
-          cache-provider: 'basic'
 
+      # 之所以把输出同时写进 build.log：
+      # 编译失败时下一步会把它整理成 build-error.log 提交回仓库，
+      # 这样不用登录 GitHub 也能从仓库里读到完整报错。
       - name: 编译 Debug APK
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee build.log
+
+      - name: 失败时把报错写回仓库
+        if: failure()
+        run: |
+          if [ -f build.log ]; then
+            {
+              echo "### 报错相关行（含上下文）"
+              grep -nE -B 2 -A 8 'e: file|error:|FAILURE:|What went wrong|> Task .* FAILED|Could not (resolve|find|determine)|Unresolved reference|Caused by:|Execution failed|BUILD FAILED' build.log | head -n 500 || true
+              echo ""
+              echo "### 日志尾部 200 行"
+              tail -n 200 build.log
+            } > build-error.log
+          else
+            echo "编译还没开始，更早的步骤就失败了" > build-error.log
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f build-error.log
+          git commit -m "记录编译错误 [skip ci]" || true
+          git push || true
 
       - name: 上传 APK（构建产物，备用）
         if: success()
@@ -44,6 +69,8 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
 
+      # 这一步是为了「手机上点一下就能装」：
+      # 构建产物要下 zip 再解压，手机不好操作；挂到 Release 上就能直接点 APK 下载。
       - name: 发到 Release
         if: success()
         env:
@@ -52,4 +79,6 @@ jobs:
           TAG="build-${GITHUB_RUN_NUMBER}"
           gh release create "$TAG" app/build/outputs/apk/debug/app-debug.apk \
             --title "轻记账 v0.1.0 · 构建 ${GITHUB_RUN_NUMBER}" \
-            --notes "在手机浏览器打开本页，点下面的 app-debug.apk 直接下载安装。"
+            --notes "在手机浏览器打开本页，点下面的 app-debug.apk 直接下载安装。
+
+          这是 debug 版（未签名发布版），安装时系统会提示「未知来源」或「禁止安装未知应用」，允许即可。"
