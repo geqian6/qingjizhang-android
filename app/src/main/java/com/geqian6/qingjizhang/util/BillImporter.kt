@@ -42,7 +42,12 @@ object BillImporter {
 
     private data class Layout(
         val source: String,
-        val timeIndex: Int,
+        /**
+         * 时间列可能有好几个候选，按优先级排好。
+         * 支付宝旧版叫「付款时间」，新版（交易流水明细）只有「交易时间」，
+         * 有的行「付款时间」还是空的 —— 所以这里存一列不够，得存一串挨个试。
+         */
+        val timeIndexes: List<Int>,
         val counterpartyIndex: Int,
         val productIndex: Int,
         val directionIndex: Int,
@@ -142,19 +147,26 @@ object BillImporter {
             return null
         }
 
-        // 情形二：这是普通压缩包 —— 找里面的表格文件，原样再喂一遍
-        val inner = content.names.firstOrNull { entry ->
+        // 情形二：这是普通压缩包 —— 里面的表格文件挨个试。
+        // 支付宝的包里常带「使用说明」之类的文件排在前面，只试第一个会误判成"这不是账单"。
+        val candidates = content.names.filter { entry ->
             val ext = entry.substringAfterLast('.', "").lowercase(Locale.ROOT)
             ext == "csv" || ext == "txt" || ext == "xlsx" || ext == "xls"
         }
-        if (inner == null) {
+        if (candidates.isEmpty()) {
             return "这个压缩包里没有表格文件（里面有：" + content.names.take(5).joinToString("、") + "）"
         }
 
-        val data = content.files[inner]
-            ?: return "压缩包里的「" + inner.substringAfterLast('/') + "」读不出来，试试先解压再选"
+        var lastError: String? = null
+        for (name in candidates) {
+            val data = content.files[name] ?: continue
+            val error = feed(context, data, acc, depth + 1)
+            if (error != null) lastError = error
+        }
+        if (acc.found) return null
 
-        return feed(context, data, acc, depth + 1)
+        return lastError
+            ?: "压缩包里的表格都不像账单明细（里面有：" + content.names.take(5).joinToString("、") + "）"
     }
 
     private fun finish(acc: Acc, error: String?): Outcome {
@@ -180,9 +192,14 @@ object BillImporter {
     // ------------------------------------------------------------------ 表格 → 流水
 
     private suspend fun importRows(context: Context, rows: List<List<String>>, acc: Acc): Boolean {
+        // 表头行的特征：既有金额列，又有收支方向列。
+        // 注意不能强求「交易对方」—— 支付宝导出时「展示交易对手信息」开关没打开就没有这一列。
         val headerIndex = rows.indexOfFirst { row ->
+            if (row.size < 4) return@indexOfFirst false
             val joined = row.joinToString("")
-            joined.contains("交易对方") && joined.contains("金额")
+            joined.contains("金额") &&
+                (joined.contains("收/支") || joined.contains("收支") ||
+                    joined.contains("交易对方") || joined.contains("交易时间"))
         }
         if (headerIndex < 0) return false
 
@@ -226,14 +243,18 @@ object BillImporter {
                 continue
             }
 
+            // 支付宝没开「展示交易对手信息」时对方列是空的，用商品说明顶上，免得列表里一片空白
+            val merchant = row.merchant.ifBlank { row.product }
+            val note = if (row.merchant.isBlank()) "" else row.product
+
             batch.add(
                 TransactionRecord(
                     amountCents = row.amountCents,
                     isExpense = row.isExpense,
-                    category = Category.guess(row.merchant, row.product, row.isExpense),
+                    category = Category.guess(merchant, row.product, row.isExpense),
                     source = layout.source,
-                    merchant = row.merchant,
-                    note = row.product,
+                    merchant = merchant,
+                    note = note,
                     rawText = "导入自" + Source.fullLabel(layout.source) + "账单",
                     status = TransactionRecord.STATUS_CONFIRMED,
                     occurredAt = row.occurredAt,
@@ -266,7 +287,13 @@ object BillImporter {
         val cents = parseCents(cell(layout.amountIndex)) ?: return null
         if (cents <= 0L) return null
 
-        val at = parseTime(cell(layout.timeIndex)) ?: return null
+        // 时间列挨个试：支付宝旧版用「付款时间」，新版用「交易时间」，个别行还可能为空
+        var time: Long? = null
+        for (index in layout.timeIndexes) {
+            time = parseTime(cell(index))
+            if (time != null) break
+        }
+        val at = time ?: return null
 
         return Row(
             occurredAt = at,
@@ -342,7 +369,12 @@ object BillImporter {
     }.getOrNull()
 
     private fun clean(raw: String): String {
-        val value = raw.trim().trim('"').trim()
+        val value = raw
+            .replace('\r', ' ')
+            .replace('\n', ' ')      // 支付宝的「备注」列里会带换行，别让它把列表撑破
+            .trim()
+            .trim('"')
+            .trim()
         return when (value) {
             "/", "-", "--", "\\", "" -> ""
             else -> value
@@ -353,40 +385,87 @@ object BillImporter {
         val cells = header.map { it.trim().trim('"') }
         if (cells.isEmpty()) return null
 
-        fun find(vararg keys: String): Int =
-            cells.indexOfFirst { cell -> keys.any { cell.contains(it) } }
+        /** 先找「名字完全一样」的列，找不到再退一步找「包含关键字」的，避免误撞近义词 */
+        fun find(vararg keys: String): Int {
+            for (key in keys) {
+                val exact = cells.indexOfFirst { it.equals(key, ignoreCase = true) }
+                if (exact >= 0) return exact
+            }
+            return cells.indexOfFirst { cell -> keys.any { cell.contains(it) } }
+        }
 
-        val counterpartyIndex = find("交易对方")
-        val amountIndex = find("金额")
-        val directionIndex = find("收/支")
-        if (counterpartyIndex < 0 || amountIndex < 0 || directionIndex < 0) return null
+        // 只有这两列是硬性要求：金额 + 方向。其余都能缺
+        val amountIndex = find("金额（元）", "金额(元)", "金额")
+        val directionIndex = find("收/支", "收/支出", "收支类型", "收支")
+        if (amountIndex < 0 || directionIndex < 0) return null
 
-        val isAlipay = cells.any { it.contains("商家订单号") || it.contains("交易创建时间") }
+        val counterpartyIndex = find("交易对方", "交易对象")
+        val productIndex = find("商品说明", "商品名称", "商品", "备注")
+
+        // 支付宝的身份证：这些列名微信从来没有
+        val isAlipay = cells.any { cell ->
+            cell.contains("商家订单号") || cell.contains("交易订单号") ||
+                cell.contains("收/付款方式") || cell.contains("对方账号") ||
+                cell.contains("交易创建时间") || cell.contains("交易分类")
+        }
         val source = if (isAlipay) Source.ALIPAY else Source.WECHAT
 
-        val timeIndex = if (isAlipay) {
-            val paid = find("付款时间")
-            if (paid >= 0) paid else find("交易创建时间")
+        val timeKeys = if (isAlipay) {
+            arrayOf("付款时间", "交易时间", "交易创建时间", "创建时间", "时间")
         } else {
-            find("交易时间")
+            arrayOf("交易时间", "付款时间", "时间")
         }
-        if (timeIndex < 0) return null
+        val timeIndexes = timeKeys.map { find(it) }.filter { it >= 0 }.distinct()
+        if (timeIndexes.isEmpty()) return null
 
         return Layout(
             source = source,
-            timeIndex = timeIndex,
+            timeIndexes = timeIndexes,
             counterpartyIndex = counterpartyIndex,
-            productIndex = find("商品名称", "商品"),
+            productIndex = productIndex,
             directionIndex = directionIndex,
             amountIndex = amountIndex,
-            statusIndex = find("当前状态", "交易状态"),
+            statusIndex = find("当前状态", "交易状态", "状态"),
         )
     }
 
     // ------------------------------------------------------------------ CSV
 
-    private fun csvRows(bytes: ByteArray): List<List<String>> =
-        decode(bytes).split('\n').map { splitCsv(it.trimEnd('\r')) }
+    /**
+     * CSV → 二维表。
+     * 必须整段扫描、不能简单按 '\n' 切 —— 支付宝的「备注」列里会带换行，
+     * 简单切法会把一条记录劈成两行，后面全部错位。
+     */
+    private fun csvRows(bytes: ByteArray): List<List<String>> {
+        val text = decode(bytes)
+        val rows = ArrayList<List<String>>()
+        val sb = StringBuilder()
+        var inQuotes = false
+
+        for (ch in text) {
+            when {
+                ch == '"' -> {
+                    inQuotes = !inQuotes
+                    sb.append(ch)
+                }
+                ch == '\r' -> {
+                    // 引号内的回车是内容，引号外是 CRLF 的一半，丢掉
+                    if (inQuotes) sb.append(ch)
+                }
+                ch == '\n' -> {
+                    if (inQuotes) {
+                        sb.append(ch)
+                    } else {
+                        rows.add(splitCsv(sb.toString()))
+                        sb.setLength(0)
+                    }
+                }
+                else -> sb.append(ch)
+            }
+        }
+        if (sb.isNotEmpty()) rows.add(splitCsv(sb.toString()))
+        return rows
+    }
 
     /** 拆一行 CSV。带引号的字段里会有逗号（微信的「商品」列很常见），不能直接 split(',') */
     private fun splitCsv(line: String): List<String> {
@@ -545,8 +624,9 @@ object BillImporter {
             bytes[3] == 0xE0.toByte()
 
     /**
-     * 微信账单是 UTF-8 带 BOM，支付宝老版是 GBK（新版本已改 UTF-8）。
-     * 先按 UTF-8 解，解出替换字符就说明猜错了，换 GBK 再来。
+     * 微信账单是 UTF-8 带 BOM；支付宝是 GBK（老版）或者 GB18030（新版）。
+     * 先按 UTF-8 解，解出替换字符（\uFFFD）就说明猜错了，换 GB18030 再试
+     * —— GB18030 是 GBK 的超集，中文基本全认，所以放在 GBK 前面。
      */
     private fun decode(bytes: ByteArray): String {
         if (bytes.size >= 3 &&
@@ -560,6 +640,10 @@ object BillImporter {
         val utf8 = String(bytes, Charset.forName("UTF-8"))
         if (utf8.none { it == '\uFFFD' }) return utf8
 
-        return runCatching { String(bytes, Charset.forName("GBK")) }.getOrDefault(utf8)
+        for (name in listOf("GB18030", "GBK")) {
+            val text = runCatching { String(bytes, Charset.forName(name)) }.getOrNull()
+            if (text != null && text.none { it == '\uFFFD' }) return text
+        }
+        return utf8
     }
 }
