@@ -4,25 +4,32 @@ import android.content.Context
 import android.net.Uri
 import com.geqian6.qingjizhang.data.AppDatabase
 import com.geqian6.qingjizhang.data.TransactionRecord
+import java.io.ByteArrayInputStream
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.nio.charset.Charset
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
+import java.util.TimeZone
+import java.util.zip.ZipInputStream
 
 /**
- * 账单导入：把微信 / 支付宝官方导出的「账单明细」CSV 变成流水。
+ * 账单导入：把微信 / 支付宝官方导出的「账单明细」变成流水。
  *
  * 三条设计原则：
  * 1. **按表头名字找列，不按第几列** —— 官方改版加一列，这里的代码不会崩。
- * 2. **宁缺勿错** —— 状态不是「成功」的、收/支是「/」的中性交易（提现、还款、充值零钱），
- *    一律不记。记错一笔比少记一笔麻烦得多。
+ * 2. **宁缺勿错** —— 状态不是「成功」的、收/支是「/」或「不计收支」的中性交易
+ *    （提现、还款、充值零钱），一律不记。记错一笔比少记一笔麻烦得多。
  * 3. **导入要和已有的自动记账去重** —— 你导入的账单和手机自动抓的往往是同一笔。
  *
- * 支持的导出方式（两家官方的「用于个人对账」）：
- * - 微信：我 → 服务 → 钱包 → 账单 → 右上角 → 常见问题 → 下载账单 → 用于个人对账 → 发邮箱
- * - 支付宝：我的 → 账单 → 右上角 → 开具交易流水证明 → 用于个人对账 → 发邮箱
- * 邮件里拿到的是压缩包，解压出来的 .csv 就是这里要选的文件。
+ * 支持的输入（都是官方「用于个人对账」导出的）：
+ * - **.csv** —— 早期导出格式，微信是 UTF-8 带 BOM，支付宝老版是 GBK，两种都认。
+ * - **.xlsx** —— 新版微信直接给 Excel。纯靠系统自带的 zip + 文本解析，不引入任何第三方库。
+ * - **.zip / 压缩包** —— 有些邮件里发的是压缩包，里面装着上面两种之一，也能直接选。
+ *
+ * 微信：我 → 服务 → 钱包 → 账单 → 右上角 → 常见问题 → 下载账单 → 用于个人对账 → 发邮箱
+ * 支付宝：我的 → 账单 → 右上角 → 开具交易流水证明 → 用于个人对账 → 发邮箱
  */
 object BillImporter {
 
@@ -50,6 +57,18 @@ object BillImporter {
         val merchant: String,
         val product: String,
     )
+
+    /** 一次导入的累计结果。csv 只有一份，xlsx/压缩包可能有多张表，所以用累计器。 */
+    private class Acc {
+        var source = ""
+        var imported = 0
+        var skipped = 0
+
+        /** 有没有认出过账单表头。没有就说明用户选错文件了。 */
+        var found = false
+    }
+
+    private class ZipContent(val names: List<String>, val files: Map<String, ByteArray>)
 
     /** 状态白名单：只有这些算「这笔钱真的动了」 */
     private val okStates = listOf(
@@ -79,41 +98,119 @@ object BillImporter {
             return Outcome("", 0, 0, "读不到这个文件的内容，换一个文件再试")
         }
 
-        val text = decode(bytes)
-        val lines = text.split('\n').map { it.trimEnd('\r') }
-        val headerIndex = lines.indexOfFirst {
-            it.contains("交易对方") && it.contains("金额")
+        val acc = Acc()
+        val error = feed(context, bytes, acc, 0)
+        return finish(acc, error)
+    }
+
+    /** 把一份文件（可能是 csv / xlsx / 压缩包）喂进去。depth 防止压缩包一层层套娃。 */
+    private suspend fun feed(context: Context, bytes: ByteArray, acc: Acc, depth: Int): String? {
+        if (depth > 3) return "这个文件里面套了太多层，读不动"
+
+        if (isOle2(bytes)) {
+            return "这是老版 Excel 格式（.xls）。用 WPS 或 Excel 打开它，另存为 .xlsx 或 .csv，再导一次"
         }
-        if (headerIndex < 0) {
+        if (isZip(bytes)) return feedZip(context, bytes, acc, depth)
+
+        importRows(context, csvRows(bytes), acc)
+        return null
+    }
+
+    /** 压缩包 / Excel 都是 zip 结构，这里统一处理 */
+    private suspend fun feedZip(
+        context: Context,
+        bytes: ByteArray,
+        acc: Acc,
+        depth: Int,
+    ): String? {
+        val content = runCatching { readEntries(bytes) }.getOrNull()
+            ?: return "这个压缩包有密码，读不开。请先用手机「文件管理」或电脑上的解压工具把它解开" +
+                "（密码就写在微信给你的那条消息里），解开后直接选里面的表格文件"
+
+        if (content.names.isEmpty()) return "这个压缩包里是空的"
+
+        // 情形一：这是 .xlsx —— 解析里面的工作表
+        val sheets = content.files.filterKeys { it.startsWith("xl/worksheets/") }
+        if (sheets.isNotEmpty()) {
+            val shared = content.files["xl/sharedStrings.xml"]
+                ?.let { parseSharedStrings(decode(it)) }
+                .orEmpty()
+
+            for ((_, data) in sheets.toSortedMap()) {
+                importRows(context, parseSheet(decode(data), shared), acc)
+            }
+            return null
+        }
+
+        // 情形二：这是普通压缩包 —— 找里面的表格文件，原样再喂一遍
+        val inner = content.names.firstOrNull { entry ->
+            val ext = entry.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            ext == "csv" || ext == "txt" || ext == "xlsx" || ext == "xls"
+        }
+        if (inner == null) {
+            return "这个压缩包里没有表格文件（里面有：" + content.names.take(5).joinToString("、") + "）"
+        }
+
+        val data = content.files[inner]
+            ?: return "压缩包里的「" + inner.substringAfterLast('/') + "」读不出来，试试先解压再选"
+
+        return feed(context, data, acc, depth + 1)
+    }
+
+    private fun finish(acc: Acc, error: String?): Outcome {
+        if (error != null) return Outcome(acc.source, acc.imported, acc.skipped, error)
+
+        if (!acc.found) {
             return Outcome(
                 "", 0, 0,
-                "这个文件不像微信或支付宝导出的账单。请确认导出的是「账单明细」的 CSV，而不是截图或 PDF"
+                "这个文件里没找到微信或支付宝的账单明细表。请确认导出的是「账单」里的明细表" +
+                    "（.csv 或 .xlsx 都行），而不是截图或 PDF"
             )
         }
 
-        val layout = buildLayout(splitCsv(lines[headerIndex]))
-            ?: return Outcome("", 0, 0, "账单表头认不出来，可能官方改了导出格式")
+        return Outcome(
+            acc.source,
+            acc.imported,
+            acc.skipped,
+            if (acc.imported == 0) "没有新记录可导入 —— 这些账单应该已经在你的账本里了"
+            else "导入完成"
+        )
+    }
+
+    // ------------------------------------------------------------------ 表格 → 流水
+
+    private suspend fun importRows(context: Context, rows: List<List<String>>, acc: Acc): Boolean {
+        val headerIndex = rows.indexOfFirst { row ->
+            val joined = row.joinToString("")
+            joined.contains("交易对方") && joined.contains("金额")
+        }
+        if (headerIndex < 0) return false
+
+        val layout = buildLayout(rows[headerIndex]) ?: return false
+
+        acc.found = true
+        if (layout.source.isNotBlank()) acc.source = layout.source
 
         val dao = AppDatabase.get(context).transactionDao()
         val batch = ArrayList<TransactionRecord>()
         val seen = HashSet<String>()
-        var skipped = 0
 
-        for (i in headerIndex + 1 until lines.size) {
-            val line = lines[i]
-            if (line.isBlank()) continue
+        for (i in headerIndex + 1 until rows.size) {
+            val cells = rows[i]
 
-            val parsed = parseRow(layout, splitCsv(line))
-            if (parsed == null) {
-                skipped++
+            // 空行（含 Excel 末尾的空白行）不算「跳过」，别把数字撑大
+            if (cells.all { it.isBlank() }) continue
+
+            val row = parseRow(layout, cells)
+            if (row == null) {
+                acc.skipped++
                 continue
             }
-            val row: Row = parsed
 
             // 同一份文件里出现两次的，只留第一条
             val key = layout.source + "|" + row.amountCents + "|" + (row.occurredAt / 60_000L)
             if (!seen.add(key)) {
-                skipped++
+                acc.skipped++
                 continue
             }
 
@@ -125,7 +222,7 @@ object BillImporter {
                 row.occurredAt + 120_000L
             )
             if (near > 0) {
-                skipped++
+                acc.skipped++
                 continue
             }
 
@@ -145,23 +242,19 @@ object BillImporter {
         }
 
         if (batch.isNotEmpty()) dao.insertAll(batch)
-
-        return Outcome(
-            layout.source,
-            batch.size,
-            skipped,
-            if (batch.isEmpty()) "没有新记录可导入 —— 这些账单应该已经在你的账本里了"
-            else "导入完成"
-        )
+        acc.imported += batch.size
+        return true
     }
-
-    // ------------------------------------------------------------------ 解析
 
     private fun parseRow(layout: Layout, cells: List<String>): Row? {
         fun cell(index: Int): String =
             if (index in cells.indices) cells[index].trim() else ""
 
         val direction = cell(layout.directionIndex)
+
+        // 「不计收支」里含「支出」两个字，必须排在前面拦掉，否则提现/还款会被记成支出
+        if (direction.contains("不计")) return null
+
         val isExpense = when {
             direction.contains("支出") -> true
             direction.contains("收入") -> false
@@ -199,6 +292,7 @@ object BillImporter {
             .replace(" ", "")
             .trim()
         if (cleaned.isEmpty()) return null
+        if (!cleaned[0].isDigit()) return null     // 全是 "-" 这样的占位符直接放弃
         return runCatching {
             BigDecimal(cleaned)
                 .multiply(BigDecimal(100))
@@ -209,14 +303,43 @@ object BillImporter {
 
     private fun parseTime(raw: String): Long? {
         if (raw.isBlank()) return null
+
         for (format in timeFormats) {
             val millis = runCatching {
                 SimpleDateFormat(format, Locale.CHINA).parse(raw)?.time
             }.getOrNull()
             if (millis != null) return millis
         }
+
+        // Excel 里日期也可能被存成一串数字（1899-12-30 起的天数）。2026 年落在 45000 上下。
+        val serial = raw.toDoubleOrNull()
+        if (serial != null && serial in 20_000.0..80_000.0) return fromExcelSerial(serial)
+
         return null
     }
+
+    /**
+     * Excel 的日期序列号 → 本地时间戳。
+     * 序列号本身是「不带时区」的，所以要按 UTC 读出来，再当成当地时间重新组装，
+     * 否则会整体偏好几个小时（东八区偏 8 小时）。
+     */
+    private fun fromExcelSerial(serial: Double): Long? = runCatching {
+        val utcMillis = ((serial - 25569.0) * 86_400_000.0).toLong()
+        val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC"))
+        utc.timeInMillis = utcMillis
+
+        val local = Calendar.getInstance()
+        local.clear()
+        local.set(
+            utc.get(Calendar.YEAR),
+            utc.get(Calendar.MONTH),
+            utc.get(Calendar.DAY_OF_MONTH),
+            utc.get(Calendar.HOUR_OF_DAY),
+            utc.get(Calendar.MINUTE),
+            utc.get(Calendar.SECOND)
+        )
+        local.timeInMillis
+    }.getOrNull()
 
     private fun clean(raw: String): String {
         val value = raw.trim().trim('"').trim()
@@ -260,6 +383,11 @@ object BillImporter {
         )
     }
 
+    // ------------------------------------------------------------------ CSV
+
+    private fun csvRows(bytes: ByteArray): List<List<String>> =
+        decode(bytes).split('\n').map { splitCsv(it.trimEnd('\r')) }
+
     /** 拆一行 CSV。带引号的字段里会有逗号（微信的「商品」列很常见），不能直接 split(',') */
     private fun splitCsv(line: String): List<String> {
         val out = ArrayList<String>()
@@ -288,6 +416,133 @@ object BillImporter {
         out.add(sb.toString())
         return out
     }
+
+    // ------------------------------------------------------------------ XLSX
+
+    /**
+     * 读压缩包。xlsx 本身就是一个 zip，里面是 XML。
+     * 只留下真正要用的条目（工作表 + 共享字符串 + 内层表格文件），避免整包解进内存。
+     */
+    private fun readEntries(bytes: ByteArray): ZipContent {
+        val names = ArrayList<String>()
+        val files = HashMap<String, ByteArray>()
+
+        ZipInputStream(ByteArrayInputStream(bytes)).use { zip ->
+            var entry = zip.nextEntry
+            while (entry != null) {
+                val name = entry.name
+                names.add(name)
+
+                val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                val keep = !entry.isDirectory && (
+                    name == "xl/sharedStrings.xml" ||
+                        name.startsWith("xl/worksheets/") ||
+                        ext == "csv" || ext == "txt" || ext == "xlsx" || ext == "xls"
+                    )
+                if (keep) files[name] = zip.readBytes()
+
+                zip.closeEntry()
+                entry = zip.nextEntry
+            }
+        }
+        return ZipContent(names, files)
+    }
+
+    private val siRe = Regex("<si\\b[^>]*>(.*?)</si>", RegexOption.DOT_MATCHES_ALL)
+    private val tRe = Regex("<t\\b[^>]*>(.*?)</t>", RegexOption.DOT_MATCHES_ALL)
+    private val rowRe = Regex("<row\\b[^>]*>(.*?)</row>", RegexOption.DOT_MATCHES_ALL)
+    private val cellRe = Regex("<c\\b([^>]*?)(?:/>|>(.*?)</c>)", RegexOption.DOT_MATCHES_ALL)
+    private val colRe = Regex("\\br=\"([A-Za-z]{1,3})\\d+\"")
+    private val typeRe = Regex("\\bt=\"([A-Za-z]+)\"")
+    private val vRe = Regex("<v\\b[^>]*>(.*?)</v>", RegexOption.DOT_MATCHES_ALL)
+
+    /** xl/sharedStrings.xml → 字符串表（单元格里存的是下标） */
+    private fun parseSharedStrings(xml: String): List<String> =
+        siRe.findAll(xml).map { match ->
+            tRe.findAll(match.groupValues[1])
+                .joinToString("") { unescape(it.groupValues[1]) }
+        }.toList()
+
+    /**
+     * xl/worksheets/sheetN.xml → 二维表。
+     * 单元格是稀疏的（空单元格直接不写），所以必须按 r="C7" 里的列号回填，
+     * 不能按出现顺序数。
+     */
+    private fun parseSheet(xml: String, shared: List<String>): List<List<String>> {
+        val out = ArrayList<List<String>>()
+
+        for (rowMatch in rowRe.findAll(xml)) {
+            val placed = ArrayList<Pair<Int, String>>()
+            var maxIndex = -1
+            var auto = 0
+
+            for (cellMatch in cellRe.findAll(rowMatch.groupValues[1])) {
+                val attrs = cellMatch.groupValues[1]
+                val body = cellMatch.groupValues[2]
+
+                val col = colRe.find(attrs)?.groupValues?.get(1)?.let { columnIndex(it) } ?: auto
+                auto = col + 1
+
+                val type = typeRe.find(attrs)?.groupValues?.get(1) ?: ""
+                val value = when (type) {
+                    "s" -> vRe.find(body)?.groupValues?.get(1)?.trim()
+                        ?.toIntOrNull()
+                        ?.let { if (it in shared.indices) shared[it] else "" } ?: ""
+
+                    "inlineStr" -> tRe.findAll(body)
+                        .joinToString("") { unescape(it.groupValues[1]) }
+
+                    else -> vRe.find(body)?.groupValues?.get(1)?.let { unescape(it) } ?: ""
+                }
+
+                placed.add(col to value)
+                if (col > maxIndex) maxIndex = col
+            }
+
+            val cells = ArrayList<String>(maxIndex + 1)
+            for (i in 0..maxIndex) cells.add("")
+            for ((col, value) in placed) if (col in cells.indices) cells[col] = value
+
+            out.add(cells)
+        }
+        return out
+    }
+
+    /** "A" → 0，"AA" → 26 */
+    private fun columnIndex(letters: String): Int {
+        var n = 0
+        for (ch in letters.uppercase(Locale.ROOT)) {
+            if (ch !in 'A'..'Z') break
+            n = n * 26 + (ch - 'A' + 1)
+        }
+        return n - 1
+    }
+
+    private fun unescape(raw: String): String {
+        if (!raw.contains('&')) return raw
+        return raw
+            .replace("&lt;", "<")
+            .replace("&gt;", ">")
+            .replace("&quot;", "\"")
+            .replace("&apos;", "'")
+            .replace("&amp;", "&")
+    }
+
+    // ------------------------------------------------------------------ 其它
+
+    private fun isZip(bytes: ByteArray): Boolean =
+        bytes.size >= 4 &&
+            bytes[0] == 0x50.toByte() &&
+            bytes[1] == 0x4B.toByte() &&
+            (bytes[2] == 0x03.toByte() || bytes[2] == 0x05.toByte() || bytes[2] == 0x07.toByte())
+
+    /** .xls 老格式（OLE2 复合文档）—— 里面是二进制，不折腾，直接引导用户另存 */
+    private fun isOle2(bytes: ByteArray): Boolean =
+        bytes.size >= 4 &&
+            bytes[0] == 0xD0.toByte() &&
+            bytes[1] == 0xCF.toByte() &&
+            bytes[2] == 0x11.toByte() &&
+            bytes[3] == 0xE0.toByte()
 
     /**
      * 微信账单是 UTF-8 带 BOM，支付宝老版是 GBK（新版本已改 UTF-8）。

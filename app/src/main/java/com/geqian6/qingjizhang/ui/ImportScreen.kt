@@ -45,7 +45,10 @@ import kotlinx.coroutines.withContext
  * 导入历史账单。
  *
  * 存在的理由：自动记账只能从装上那一刻开始记，之前几个月的账全是空的。
- * 微信和支付宝都允许导出「用于个人对账」的账单明细（CSV），导进来就把历史补齐了。
+ * 微信和支付宝都允许导出「用于个人对账」的账单明细，导进来就把历史补齐了。
+ *
+ * 文件格式不用管：.csv（早期导出）、.xlsx（新版微信直接给 Excel）、
+ * 甚至邮件里那个压缩包本身，都能直接选。
  */
 @Composable
 fun ImportScreen(onBack: () -> Unit) {
@@ -126,7 +129,8 @@ fun ImportScreen(onBack: () -> Unit) {
                     "填你自己的邮箱，提交",
                     "去邮箱收邮件，把附件下载下来",
                 ),
-                tail = "微信发来的是压缩包，密码会显示在微信页面上。解压出来的 .csv 文件才是要导入的。",
+                tail = "下一步不用管格式：微信现在给的是 .xlsx，老一些的是 .csv，" +
+                    "邮件里是压缩包的话直接选那个压缩包也行。都能读。",
             )
         }
 
@@ -139,7 +143,7 @@ fun ImportScreen(onBack: () -> Unit) {
                     "支付宝 → 我的 → 账单 → 右上角「…」",
                     "选「开具交易流水证明」→ 用途选「用于个人对账」",
                     "选时间范围，填邮箱，提交",
-                    "去邮箱下载附件并解压，得到 .csv 文件",
+                    "去邮箱下载附件，压缩包可以直接选，里面是表格文件",
                 ),
                 tail = "两家导出的文件都能导进来，先导哪家都行，重复的会自动跳过。",
             )
@@ -156,7 +160,7 @@ fun ImportScreen(onBack: () -> Unit) {
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
-                    text = if (busy) "正在读账单…" else "选择账单文件（.csv）",
+                    text = if (busy) "正在读账单…" else "选择账单文件",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = Color.White,
@@ -173,6 +177,7 @@ fun ImportScreen(onBack: () -> Unit) {
                     color = AppColor.textPrimary,
                 )
                 Spacer(Modifier.height(8.dp))
+                InfoRow("能直接读 .xlsx（新版微信导出的 Excel）、.csv，以及邮件里那个压缩包")
                 InfoRow("会按商家名自动归类成餐饮 / 交通 / 日用这些")
                 InfoRow("已经在账本里的（比如自动记账抓过的）会自动跳过，不会记两遍")
                 InfoRow("提现、还信用卡这类「钱只是换了个地方」的记录不导入，免得把支出算多")
