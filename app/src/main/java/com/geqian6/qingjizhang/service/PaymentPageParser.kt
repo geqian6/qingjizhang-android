@@ -240,7 +240,10 @@ object PaymentPageParser {
         if (amountCents <= 0L) return null
 
         // 第 3 道闸门：商户名（对方名字）与备注
-        val merchant = extractMerchant(items, joined, source).ifBlank { Source.fullLabel(source) }
+        // 抓不到名字就留空 —— 绝不能拿「微信支付」这种渠道名充数，
+        // 否则账单里满屏都是「微信支付」，既看不出买了什么，也没法归类。
+        // 留空后列表会显示分类名（餐饮 / 交通…），信息量比渠道名大得多。
+        val merchant = extractMerchant(items, joined, source)
         val scene = detectScene(joined)
         val channel = extractChannel(items)
         val note = buildNote(isExpense, merchant, scene, channel)

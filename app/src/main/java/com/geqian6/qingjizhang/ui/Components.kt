@@ -1,9 +1,12 @@
 package com.geqian6.qingjizhang.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,10 +20,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -300,16 +310,21 @@ fun CategoryBadge(key: String, badgeSize: Dp = 40.dp) {
     }
 }
 
-/** 一条流水 */
+/**
+ * 一条流水。点一下 = 打开「改方向 / 改分类 / 删掉」面板，长按也一样。
+ * 加这个入口的原因：自动记账难免认错，之前记错了没有任何办法处理。
+ */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TransactionRow(
     record: TransactionRecord,
     onClick: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onClick() }
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 18.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -355,6 +370,118 @@ fun TransactionRow(
             color = if (record.isExpense) AppColor.expense else AppColor.income,
         )
     }
+}
+
+/**
+ * 一笔账的「改一改」面板：改方向、改分类、删掉。
+ *
+ * 改动即时生效（不用点保存）—— 自动记账认错的时候，用户要的就是「马上改掉」。
+ * 方向换了以后分类要跟着换：支出和收入用的是两套分类 key，留着旧的会显示成「未分类」。
+ */
+@Composable
+fun RecordEditDialog(
+    record: TransactionRecord,
+    onDismiss: () -> Unit,
+    onSave: (TransactionRecord) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var draft by remember(record.id) { mutableStateOf(record) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = draft.merchant.ifBlank { Category.label(draft.category) },
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = AppColor.textPrimary,
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = Money.formatSigned(draft.amountCents, draft.isExpense) +
+                        "  ·  " + Source.fullLabel(draft.source) +
+                        "  ·  " + Dates.timeLabel(draft.occurredAt),
+                    fontSize = 12.sp,
+                    color = AppColor.textSecondary,
+                )
+                if (draft.note.isNotBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = draft.note,
+                        fontSize = 12.sp,
+                        color = AppColor.textSecondary,
+                    )
+                }
+
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = "方向",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColor.textPrimary,
+                )
+                Spacer(Modifier.height(8.dp))
+                Segmented(
+                    options = listOf("支出", "收入"),
+                    selectedIndex = if (draft.isExpense) 0 else 1,
+                    onSelect = { index ->
+                        val nextExpense = index == 0
+                        if (nextExpense != draft.isExpense) {
+                            val fallback = if (nextExpense) Category.OTHER else Category.INCOME_OTHER
+                            val next = draft.copy(isExpense = nextExpense, category = fallback)
+                            draft = next
+                            onSave(next)
+                        }
+                    },
+                )
+
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    text = "分类",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = AppColor.textPrimary,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Category.keys(draft.isExpense).forEach { key ->
+                        PillChip(
+                            label = Category.label(key),
+                            selected = draft.category == key,
+                            onClick = {
+                                val next = draft.copy(category = key)
+                                draft = next
+                                onSave(next)
+                            },
+                            selectedColor = categoryColor(key),
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    text = "改完直接生效，不用保存。",
+                    fontSize = 11.sp,
+                    color = AppColor.textTertiary,
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text("完成", color = AppColor.primary)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDelete) {
+                Text("删掉这笔", color = AppColor.expense)
+            }
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------

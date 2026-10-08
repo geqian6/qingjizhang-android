@@ -13,6 +13,10 @@ interface TransactionDao {
     @Insert
     suspend fun insert(record: TransactionRecord): Long
 
+    /** 账单导入用：一次写一批，别一条一条写 */
+    @Insert
+    suspend fun insertAll(records: List<TransactionRecord>): List<Long>
+
     @Update
     suspend fun update(record: TransactionRecord)
 
@@ -52,6 +56,13 @@ interface TransactionDao {
      */
     @Query("SELECT COUNT(*) FROM transactions WHERE source = :source AND amountCents = :amount AND occurredAt > :since")
     suspend fun countRecentDuplicate(source: String, amount: Long, since: Long): Int
+
+    /**
+     * 账单导入去重：同一来源、同金额、时间落在 [from, to] 里的已有记录数。
+     * 导入的账单和自动记账抓的往往是同一笔，靠这个避免记两遍。
+     */
+    @Query("SELECT COUNT(*) FROM transactions WHERE source = :source AND amountCents = :amount AND occurredAt BETWEEN :from AND :to")
+    suspend fun countNear(source: String, amount: Long, from: Long, to: Long): Int
 }
 
 data class PendingCount(

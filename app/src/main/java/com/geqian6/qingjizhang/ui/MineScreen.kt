@@ -49,6 +49,7 @@ fun MineScreen(
     viewModel: AppViewModel,
     budgetStore: BudgetStore,
     onOpenBudget: () -> Unit,
+    onOpenImport: () -> Unit,
 ) {
     val context = LocalContext.current
     val monthRecords by viewModel.monthRecords.collectAsState()
@@ -373,6 +374,36 @@ fun MineScreen(
                         text = "总预算 ¥" + com.geqian6.qingjizhang.util.Money.format(
                             budgetStore.totalBudgetCents()
                         ),
+                        fontSize = 12.sp,
+                        color = AppColor.textSecondary,
+                    )
+                }
+                Text("›", fontSize = 18.sp, color = AppColor.textTertiary)
+            }
+        }
+
+        // 导入历史账单：自动记账只能从装上那天开始，之前的账靠这个补
+        item {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(AppColor.card)
+                    .clickable { onOpenImport() }
+                    .padding(horizontal = 18.dp, vertical = 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column {
+                    Text(
+                        text = "导入历史账单",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = AppColor.textPrimary,
+                    )
+                    Spacer(Modifier.height(3.dp))
+                    Text(
+                        text = "把微信、支付宝以前月份的账单导进来，补上历史",
                         fontSize = 12.sp,
                         color = AppColor.textSecondary,
                     )

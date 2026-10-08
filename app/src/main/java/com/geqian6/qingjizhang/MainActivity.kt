@@ -40,6 +40,7 @@ import com.geqian6.qingjizhang.ui.BottomTabBar
 import com.geqian6.qingjizhang.ui.BudgetScreen
 import com.geqian6.qingjizhang.ui.DetailScreen
 import com.geqian6.qingjizhang.ui.HomeScreen
+import com.geqian6.qingjizhang.ui.ImportScreen
 import com.geqian6.qingjizhang.ui.MineScreen
 import com.geqian6.qingjizhang.ui.StatsScreen
 import com.geqian6.qingjizhang.ui.theme.AppColor
@@ -66,6 +67,7 @@ private fun AppRoot() {
     var tab by remember { mutableStateOf(AppTab.HOME) }
     var showAdd by remember { mutableStateOf(false) }
     var showBudget by remember { mutableStateOf(false) }
+    var showImport by remember { mutableStateOf(false) }
 
     // Android 13+ 的通知权限。只用于「自动记了一笔」的提醒，拒绝也不影响记账本身。
     val notificationPermission = rememberLauncherForActivityResult(
@@ -94,6 +96,10 @@ private fun AppRoot() {
                         onBack = { showBudget = false },
                     )
 
+                    showImport -> ImportScreen(
+                        onBack = { showImport = false },
+                    )
+
                     else -> when (tab) {
                         AppTab.HOME -> HomeScreen(
                             viewModel = viewModel,
@@ -113,12 +119,13 @@ private fun AppRoot() {
                             viewModel = viewModel,
                             budgetStore = budgetStore,
                             onOpenBudget = { showBudget = true },
+                            onOpenImport = { showImport = true },
                         )
                     }
                 }
             }
 
-            if (!showAdd && !showBudget) {
+            if (!showAdd && !showBudget && !showImport) {
                 BottomTabBar(
                     current = tab,
                     onSelect = { tab = it },
@@ -127,7 +134,7 @@ private fun AppRoot() {
         }
 
         // 「记一笔」悬浮按钮，只在首页和明细页出现
-        if (!showAdd && !showBudget && (tab == AppTab.HOME || tab == AppTab.DETAIL)) {
+        if (!showAdd && !showBudget && !showImport && (tab == AppTab.HOME || tab == AppTab.DETAIL)) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)

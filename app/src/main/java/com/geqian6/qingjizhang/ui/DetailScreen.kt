@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.geqian6.qingjizhang.data.TransactionRecord
 import com.geqian6.qingjizhang.ui.theme.AppColor
 import com.geqian6.qingjizhang.util.Dates
 import com.geqian6.qingjizhang.util.Money
@@ -37,11 +38,13 @@ import com.geqian6.qingjizhang.util.Stats
 @Composable
 fun DetailScreen(
     viewModel: AppViewModel,
-    onRecordClick: (Long) -> Unit = {},
 ) {
     val monthRecords by viewModel.monthRecords.collectAsState()
     val monthAnchor by viewModel.monthAnchor.collectAsState()
     var sourceFilter by remember { mutableStateOf<String?>(null) }
+
+    // 点任意一笔 → 弹出「改方向 / 改分类 / 删掉」。自动记账认错时全靠这个口子修。
+    var editing by remember { mutableStateOf<TransactionRecord?>(null) }
 
     val filtered = remember(monthRecords, sourceFilter) {
         val key = sourceFilter
@@ -59,6 +62,14 @@ fun DetailScreen(
     ) {
         item {
             ScreenHeader(title = "账单明细")
+        }
+
+        item {
+            Text(
+                text = "点任意一笔，可以改分类、改方向或者删掉",
+                fontSize = 11.sp,
+                color = AppColor.textTertiary,
+            )
         }
 
         item {
@@ -126,7 +137,8 @@ fun DetailScreen(
                     DayGroupCard(
                         dayStart = dayStart,
                         records = dayRecords,
-                        onRecordClick = { onRecordClick(it.id) },
+                        onRecordClick = { editing = it },
+                        onRecordLongClick = { editing = it },
                     )
                 }
             }
@@ -154,6 +166,18 @@ fun DetailScreen(
                 }
             }
         }
+    }
+
+    editing?.let { record ->
+        RecordEditDialog(
+            record = record,
+            onDismiss = { editing = null },
+            onSave = { viewModel.update(it) },
+            onDelete = {
+                viewModel.remove(record)
+                editing = null
+            },
+        )
     }
 }
 

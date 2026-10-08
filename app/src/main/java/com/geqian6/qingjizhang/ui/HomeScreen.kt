@@ -21,6 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -60,6 +63,9 @@ fun HomeScreen(
     val budgetWarning = usedFraction >= 0.8f
 
     val recent = monthRecords.take(2)
+
+    // 记错的账要能改能删。点任意一笔弹出「改分类 / 删掉」面板。
+    var editing by remember { mutableStateOf<TransactionRecord?>(null) }
 
     LazyColumn(
         modifier = Modifier
@@ -231,9 +237,25 @@ fun HomeScreen(
                 ) {
                     recent.forEachIndexed { index, record ->
                         if (index > 0) AppDivider()
-                        TransactionRow(record = record, onClick = onOpenDetail)
+                        TransactionRow(
+                            record = record,
+                            onClick = { editing = record },
+                            onLongClick = { editing = record },
+                        )
                     }
                     AppDivider()
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 11.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = "点任意一笔可改分类或删掉",
+                            fontSize = 11.sp,
+                            color = AppColor.textTertiary,
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -251,6 +273,18 @@ fun HomeScreen(
                 }
             }
         }
+    }
+
+    editing?.let { record ->
+        RecordEditDialog(
+            record = record,
+            onDismiss = { editing = null },
+            onSave = { viewModel.update(it) },
+            onDelete = {
+                viewModel.remove(record)
+                editing = null
+            },
+        )
     }
 }
 
@@ -278,6 +312,7 @@ fun DayGroupCard(
     dayStart: Long,
     records: List<TransactionRecord>,
     onRecordClick: (TransactionRecord) -> Unit = {},
+    onRecordLongClick: (TransactionRecord) -> Unit = {},
 ) {
     val dayExpense = records.filter { it.isExpense }.sumOf { it.amountCents }
     val dayIncome = records.filter { !it.isExpense }.sumOf { it.amountCents }
@@ -318,7 +353,11 @@ fun DayGroupCard(
         }
         records.forEachIndexed { index, record ->
             if (index > 0) AppDivider()
-            TransactionRow(record = record, onClick = { onRecordClick(record) })
+            TransactionRow(
+                record = record,
+                onClick = { onRecordClick(record) },
+                onLongClick = { onRecordLongClick(record) },
+            )
         }
     }
 }

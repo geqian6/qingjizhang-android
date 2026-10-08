@@ -82,7 +82,8 @@ object PaymentParser {
             else -> return null
         }
 
-        val merchant = extractMerchant(text).ifBlank { Source.fullLabel(source) }
+        // 抓不到商户名就留空，别拿「微信支付 / 支付宝」这种渠道名充数（理由同 PaymentPageParser）
+        val merchant = extractMerchant(text)
         val note = buildNote(isExpense, merchant, text)
         val guessed = Category.guess(merchant, isExpense)
 
