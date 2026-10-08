@@ -1,7 +1,7 @@
 ===== 运行信息 =====
-run_number : 9
-commit     : 77992abc42fe8d6549762c48ec7ef89025119686
-时间(UTC)  : Wed Oct  7 14:28:10 UTC 2026
+run_number : 10
+commit     : 2dbb222c29de4a77c4f61159afa1244dbc3f3023
+时间(UTC)  : Thu Oct  8 08:01:07 UTC 2026
 
 ===== Gradle / Java 版本 =====
 
@@ -23,11 +23,11 @@ OpenJDK Runtime Environment Temurin-17.0.20.1+1 (build 17.0.20.1+1)
 OpenJDK 64-Bit Server VM Temurin-17.0.20.1+1 (build 17.0.20.1+1, mixed mode, sharing)
 
 ===== APK 产物目录 =====
-total 8920
-drwxr-xr-x 2 runner runner    4096 Oct  7 14:28 .
-drwxr-xr-x 3 runner runner    4096 Oct  7 14:28 ..
--rw-r--r-- 1 runner runner 9120152 Oct  7 14:28 app-debug.apk
--rw-r--r-- 1 runner runner     407 Oct  7 14:28 output-metadata.json
+total 8964
+drwxr-xr-x 2 runner runner    4096 Oct  8 08:01 .
+drwxr-xr-x 3 runner runner    4096 Oct  8 08:01 ..
+-rw-r--r-- 1 runner runner 9165072 Oct  8 08:01 app-debug.apk
+-rw-r--r-- 1 runner runner     407 Oct  8 08:01 output-metadata.json
 
 ===== 报错相关行（含上下文） =====
 
@@ -80,7 +80,7 @@ Daemon will be stopped at the end of the build
 > Task :app:packageDebug
 > Task :app:createDebugApkListingFileRedirect
 > Task :app:assembleDebug
-gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run-1791383245728.json
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run-1791446422045.json
 
 BUILD SUCCESSFUL in 48s
 38 actionable tasks: 21 executed, 17 from cache
